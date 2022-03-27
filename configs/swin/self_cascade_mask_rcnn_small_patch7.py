@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_instance.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
-data_root = '' #自定义训练集路径（需更改）changeasd
+data_root = '' #自定义训练集路径（需更改）change in 13
 
 model = dict(
     backbone=dict(
