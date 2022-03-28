@@ -1,0 +1,8 @@
+# single-gpu training
+python tools/train.py <CONFIG_FILE> --cfg-options model.pretrained=<PRETRAIN_MODEL> [model.backbone.use_checkpoint=True] [other optional arguments]
+
+# multi-gpu training
+tools/dist_train.sh <CONFIG_FILE> <GPU_NUM> --cfg-options model.pretrained=<PRETRAIN_MODEL> [model.backbone.use_checkpoint=True] [other optional arguments]
+
+#command
+python tools/train.py configs/swin/self_cascade_mask_rcnn_small_patch7.py 2 --cfg-options model.pretrained=<PRETRAIN_MODEL>
