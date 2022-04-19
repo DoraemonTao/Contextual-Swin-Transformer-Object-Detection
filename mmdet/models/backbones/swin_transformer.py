@@ -2,7 +2,7 @@
 # Swin Transformer
 # Copyright (c) 2021 Microsoft
 # Licensed under The MIT License [see LICENSE for details]
-# Written by Ze Liu, Yutong Lin, Yixuan Wei
+# Written by 曾涛
 # --------------------------------------------------------
 
 import torch
