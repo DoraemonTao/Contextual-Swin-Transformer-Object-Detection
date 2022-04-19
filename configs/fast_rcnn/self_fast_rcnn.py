@@ -1,0 +1,1 @@
+base=['./fast_rcnn_r50_fpn_1x_coco.py']
