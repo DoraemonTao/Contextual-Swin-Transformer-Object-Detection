@@ -1,4 +1,3 @@
-# model settings
 model = dict(
     type='CascadeRCNN',
     pretrained=None,

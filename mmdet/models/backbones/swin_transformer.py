@@ -24,8 +24,8 @@ class Mlp(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
+        self.fc1 = nn.Linear(in_features, hidden_features)  # 线性层
+        self.act = act_layer()  # 激活层
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
 
@@ -82,9 +82,15 @@ class WindowAttention(nn.Module):
         qk_scale (float | None, optional): Override default qk scale of head_dim ** -0.5 if set
         attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
+        build_crpb (bool): Whether build contextual position bias Default: False
+        shared_weight (bool): Whether shared the contextual relative bias weight across different heads. Default: False
+        build_mlp(bool): whether build conv after the contextual relative position bias. Default: False
+        mlp_ratio(float):Ratio of mlp hidden dim to embedding dim. Default: 4.0
+        config:Config of contextual relative bias on query key value.Only work when build_crpb is True Default:[False,False,False]
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.,
+                 build_mlp=False,mlp_ratio = 4.0,config = {'build':False,'q':False,'k':False,'v':False,'share_weight':False}):
 
         super().__init__()
         self.dim = dim
@@ -92,14 +98,30 @@ class WindowAttention(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim ** -0.5
+        self.build_mlp = build_mlp
+        self.config = config
+
+        assert not(self.build_mlp == True and self.build_crpb == False) ,'Mlp Error  on contextual relative position bias'
 
         # define a parameter table of relative position bias
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+
+        # define a parameter table of contextual relative position bias
+        self.v_crpb_conv = nn.Conv2d(self.num_heads, self.num_heads, self.window_size,
+                                     self.window_size)  # 连接在vrT之后，用于降维度
+        self.mlp_ratio = mlp_ratio
+
+        # create mlp after contextual relative bias
+        if build_mlp is True:
+            mlp_hidden_dim = int(num_heads *self.mlp_ratio)
+            self.mlp = Mlp(in_features=num_heads, hidden_features=mlp_hidden_dim, act_layer=nn.GELU, drop=nn.LayerNorm)
+
+        # initialize the parameter of cPRE
+        self.contextual_relative_position_bias_table = self.reset_parameters()
 
         # get pair-wise relative position index for each token inside the window
-        coords_h = torch.arange(self.window_size[0])
+        coords_h = torch.arange(self.window_size[0])  # torch.arange:output from 0 to end-1
         coords_w = torch.arange(self.window_size[1])
+        # torch.mesh 在这里的作用相当于一个表示y方向上的坐标一个表示x方向上的坐标 torch.stack相当于将这两个融合
         coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
         coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
@@ -107,16 +129,103 @@ class WindowAttention(nn.Module):
         relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
         relative_coords[:, :, 1] += self.window_size[1] - 1
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww 将x和y坐标相加
         self.register_buffer("relative_position_index", relative_position_index)
-
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
+        # Linear 只会作用在最后一个维度上面，除了最后一个维度外，其余维度不改变.
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)  # qkv input: dim output: dim*
+        self.attn_drop = nn.Dropout(attn_drop)  #
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-
-        trunc_normal_(self.relative_position_bias_table, std=.02)
+        trunc_normal_(self.contextual_relative_position_bias_table, std=.02)
         self.softmax = nn.Softmax(dim=-1)
+
+    def reset_parameters(self):
+        """" Initialize the parameter of cRPE
+
+        """
+        if self.build_crpb is False:
+            # don't build contextual relative_position_bias table
+            if self.config.get('shared_weight') is False:
+                # don't share the weight across different heads
+                contextual_relative_position_bias_table = nn.Parameter(
+                    torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), self.num_heads))  # 2*Wh-1 * 2*Ww-1, num_heads
+            else:
+                # share the weight across different heads
+                contextual_relative_position_bias_table = nn.Parameter(
+                    torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1))
+                )
+                contextual_relative_position_bias_table = torch.stack(tuple(contextual_relative_position_bias_table for i in range(self.num_heads)),dim = 1)
+        else:
+            # build the contextual relative_position_bias table
+            # calculate the effective num of q,k,v combination
+            qkv_num = 0
+            for i in ('q', 'k', 'v'):
+                if self.config.get(i) is True:
+                    qkv_num = qkv_num + 1
+            if self.config.get('shared_weight') is False:
+                contextual_relative_position_bias_table = nn.Parameter(
+                    torch.zeros(qkv_num, (2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), self.head_dim, self.num_heads))
+            else:
+                contextual_relative_position_bias_table = nn.Parameter(
+                    torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1),self.head_dim)
+                )
+                contextual_relative_position_bias_table = torch.stack(
+                    tuple(contextual_relative_position_bias_table for i in range(self.num_heads)), dim=2)
+
+        return contextual_relative_position_bias_table
+    def get_qkv_crpb(self, head_dim, build_crpb=False):
+        """ Build contextual relative position bias on queries, keys and values.
+
+        Parameter
+        --------
+        head_dim:(int) the dim on single head
+        build_crpb:(Bool) whether build contextual relative position bias
+
+        Returns
+        ------
+        q_c_rpb:[Ww*Wh,Ww*Wh , C//nH, nH]
+        k_c_rpb:[Ww*Wh,Ww*Wh , C//nH, nH]
+        v_c_rpb:[Ww*Wh,Ww*Wh , C//nH, nH]
+        """
+        index = 0
+        if build_crpb == False:
+            return None, None, None
+        if self.build_mlp:
+            self.contextual_relative_position_bias_table = self.mlp(self.contextual_relative_position_bias_table)
+        if self.config.get('q') is True:
+            q_crpb_table = self.contextual_relative_position_bias_table[index]
+            index = index + 1
+            q_crpb = q_crpb_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], head_dim, -1)
+            q_crpb = q_crpb.permute(3, 0, 1, 2).contiguous()
+        else:
+            q_crpb = None
+        if self.config.get('k') is True:
+            k_crpb_table = self.contextual_relative_position_bias_table[index]
+            index = index + 1
+            k_crpb = k_crpb_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], head_dim, -1)
+            k_crpb = k_crpb.permute(3, 0, 1, 2).contiguous()
+        else:
+            k_crpb = None
+        if self.config.get('v') is True:
+            self.k_crpb_table = self.contextual_relative_position_bias_table[index]
+            v_crpb = self.v_crpb_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], head_dim, -1)
+            v_crpb = v_crpb.permute(3, 0, 1, 2).contiguous()
+        else:
+            v_crpb = None
+
+        return q_crpb, k_crpb, v_crpb
+
+
+        # q_crpb    [Ww * Wh,Ww * Wh,C // nH,nH]
+        # permute   [nH,Ww*Wh,Ww * Wh, C // nH]
+
+
+
+
+        return q_crpb, k_crpb, v_crpb
 
     def forward(self, x, mask=None):
         """ Forward function.
@@ -126,16 +235,37 @@ class WindowAttention(nn.Module):
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
         B_, N, C = x.shape
+        # qkv([num_windows*B,Wh*Ww,C]--->[num_windows*B,Wh*Ww,3C])
+        # reshape([num_windows*B,Wh*Ww,3C]--->[num_windows*B,Wh*Ww,3,num_heads,C//num_heads])
+        # permute([num_windows*B,Wh*Ww,3,num_heads,C//num_heads]--->[3,num_windows*B,num_heads,Wh*Ww,C//num_heads])
         qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
-        attn = (q @ k.transpose(-2, -1))
+        attn = torch.matmul(q, k.transpose(-2, -1))  # qkT  [num_windows*B, nH, Wh*Ww,Wh*Ww]
 
-        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
+        q_crpb, k_crpb, v_crpb = self.get_qkv_crpb(C // self.num_heads, self.build_crpb)
+        if self.config.get('build') is True:
+            if q_crpb is not None:
+                q_crpb = torch.matmul(k, q_crpb.transpose(-3, -2, -1))  # qrT (num_windows*B, nH, Wh*Ww, Wh*Ww)
+                attn = attn + q_crpb
+            if k_crpb is not None:
+                k_crpb = torch.matmul(q, k_crpb.transpose(-3, -2, -1))  # krT (num_windows*B, nH, Wh*Ww, Wh*Ww)
+                attn = attn + k_crpb
+        else:
+            # relative_position_bias_table:         [3,2*Wh-1 * 2*Ww-1, C//nH, nH]
+            # relative_position_index:              [Ww*Wh,Ww*Wh]
+            # relative_position_index.view(-1)      [Ww*Wh*Ww*Wh]
+            # relative_position_bias_table[self.relative_position_index.view(-1)] [Ww*Wh*Ww*Wh,nH]
+            # relative_position_bias                [Ww*Wh,Ww*Wh,nH]
+            # permute  --------------------->       [nH,Ww*Wh,Ww*Wh]
+            # query,key,val
+            # q_relative_position_bias = self.
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
@@ -148,6 +278,12 @@ class WindowAttention(nn.Module):
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+
+        # v_crpb @ attn
+        if v_crpb is not None:
+            # (nH, Wh*Ww, nW * B,Wh * Ww) @ (nH, Wh * Ww, Wh * Wh , C//nH) ->(nH, Wh * Ww ,nW * B, C//nH)
+            v_crpb = torch.matmul(attn.permute(1, 2, 0, 3), v_crpb).permute(2, 0, 1, 3)
+            x = x + v_crpb
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -262,6 +398,7 @@ class PatchMerging(nn.Module):
         dim (int): Number of input channels.
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
+
     def __init__(self, dim, norm_layer=nn.LayerNorm):
         super().__init__()
         self.dim = dim
@@ -414,7 +551,7 @@ class PatchEmbed(nn.Module):
 
     def __init__(self, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
         super().__init__()
-        patch_size = to_2tuple(patch_size)
+        patch_size = to_2tuple(patch_size)  # 将一个数字转换成含有两个元素的元组
         self.patch_size = patch_size
 
         self.in_chans = in_chans
@@ -505,7 +642,7 @@ class SwinTransformer(nn.Module):
         self.out_indices = out_indices
         self.frozen_stages = frozen_stages
 
-        # split image into non-overlapping patches
+        # split image into non-overlapping patches change the img channel from 3*W*H to 96*W
         self.patch_embed = PatchEmbed(
             patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
@@ -516,7 +653,8 @@ class SwinTransformer(nn.Module):
             patch_size = to_2tuple(patch_size)
             patches_resolution = [pretrain_img_size[0] // patch_size[0], pretrain_img_size[1] // patch_size[1]]
 
-            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, embed_dim, patches_resolution[0], patches_resolution[1]))
+            self.absolute_pos_embed = nn.Parameter(
+                torch.zeros(1, embed_dim, patches_resolution[0], patches_resolution[1]))  # absolute position embedding
             trunc_normal_(self.absolute_pos_embed, std=.02)
 
         self.pos_drop = nn.Dropout(p=drop_rate)

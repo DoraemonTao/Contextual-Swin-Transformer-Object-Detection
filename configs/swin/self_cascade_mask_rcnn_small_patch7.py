@@ -1,9 +1,8 @@
 _base_ = [
-    '../_base_/models/cascade_mask_rcnn_swin_fpn.py',
+    '../_base_/models/mask_rcnn_swin_fpn.py',
     '../_base_/datasets/coco_instance.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
-data_root = '' #自定义训练集路径（需更改）change in 13
 
 model = dict(
     backbone=dict(
@@ -18,65 +17,14 @@ model = dict(
     ),
     neck=dict(in_channels=[96, 192, 384, 768]),
     roi_head=dict(
-        bbox_head=[
-            dict(
-                type='ConvFCBBoxHead',
-                num_shared_convs=4,
-                num_shared_fcs=1,
-                in_channels=256,
-                conv_out_channels=256,
-                fc_out_channels=1024,
-                roi_feat_size=7,
-                num_classes=3,
-                bbox_coder=dict(
-                    type='DeltaXYWHBBoxCoder',
-                    target_means=[0., 0., 0., 0.],
-                    target_stds=[0.1, 0.1, 0.2, 0.2]),
-                reg_class_agnostic=False,
-                reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
-                loss_cls=dict(
-                    type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
-                loss_bbox=dict(type='GIoULoss', loss_weight=10.0)),
-            dict(
-                type='ConvFCBBoxHead',
-                num_shared_convs=4,
-                num_shared_fcs=1,
-                in_channels=256,
-                conv_out_channels=256,
-                fc_out_channels=1024,
-                roi_feat_size=7,
-                num_classes=3,
-                bbox_coder=dict(
-                    type='DeltaXYWHBBoxCoder',
-                    target_means=[0., 0., 0., 0.],
-                    target_stds=[0.05, 0.05, 0.1, 0.1]),
-                reg_class_agnostic=False,
-                reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
-                loss_cls=dict(
-                    type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
-                loss_bbox=dict(type='GIoULoss', loss_weight=10.0)),
-            dict(
-                type='ConvFCBBoxHead',
-                num_shared_convs=4,
-                num_shared_fcs=1,
-                in_channels=256,
-                conv_out_channels=256,
-                fc_out_channels=1024,
-                roi_feat_size=7,
-                num_classes=3,
-                bbox_coder=dict(
-                    type='DeltaXYWHBBoxCoder',
-                    target_means=[0., 0., 0., 0.],
-                    target_stds=[0.033, 0.033, 0.067, 0.067]),
-                reg_class_agnostic=False,
-                reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
-                loss_cls=dict(
-                    type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
-                loss_bbox=dict(type='GIoULoss', loss_weight=10.0))
-        ]))
+        bbox_head=dict(
+            num_classes=3
+        ),
+        mask_head=dict(
+            num_classes=3
+        )
+    )
+)
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
@@ -84,7 +32,7 @@ img_norm_cfg = dict(
 # augmentation strategy originates from DETR / Sparse RCNN
 train_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
+    dict(type='LoadAnnotations', with_bbox=True, with_mask=False),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='AutoAugment',
          policies=[
@@ -118,39 +66,27 @@ train_pipeline = [
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
     dict(type='DefaultFormatBundle'),
-    dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels', 'gt_masks']),
-]
-test_pipeline = [
-    dict(type='LoadImageFromFile'),
-    dict(
-        type='MultiScaleFlipAug',
-        img_scale=(1333, 800),
-        flip=False,
-        transforms=[
-            dict(type='Resize', keep_ratio=True),
-            dict(type='RandomFlip'),
-            dict(type='Normalize', **img_norm_cfg),
-            dict(type='Pad', size_divisor=32),
-            dict(type='ImageToTensor', keys=['img']),
-            dict(type='Collect', keys=['img']),
-        ])
+    dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels']),
 ]
 data = dict(train=dict(
-    ann_file=data_root+'annotations/instances_train.json',# annotation的路径
-    img_prefix=data_root+'train/images/', #训练集图片的路径
-    pipeline=train_pipeline
-    ),
-    val = dict (
-        ann_file=data_root+'annotations/instances_val.json',
-        img_prefix=data_root+'val/images/',
-        pipeline= test_pipeline
-    ),
-    test = dict(
-        ann_file=data_root+'annotations/instances_test.json',
-        img_prefix=data_root+'val/images/',
-        pipeline=test_pipeline
-    )
-)
+    # ann_file=data_root + 'annotations/instances_val2017.json',
+    ann_file='F:/Connect/orange_detection_COCO/annotations/voc_test.json',
+    # img_prefix=data_root + 'val2017/',
+    img_prefix='F:/Connect/orange_detection_COCO/images/',
+        pipeline=train_pipeline),
+    val=dict(
+        # ann_file=data_root + 'annotations/instances_val2017.json',
+        ann_file='F:/Connect/orange_detection_COCO/annotations/voc_test.json',
+        # img_prefix=data_root + 'val2017/',
+        img_prefix='F:/Connect/orange_detection_COCO/images/'
+        ),
+    test=dict(
+        # ann_file=data_root + 'annotations/instances_val2017.json',
+        ann_file='F:/Connect/orange_detection_COCO/annotations/voc_test.json',
+        # img_prefix=data_root + 'val2017/',
+        img_prefix='F:/Connect/orange_detection_COCO/images/'
+        ))
+evaluation = dict(metric=['bbox'])
 
 optimizer = dict(_delete_=True, type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.05,
                  paramwise_cfg=dict(custom_keys={'absolute_pos_embed': dict(decay_mult=0.),
