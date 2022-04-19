@@ -2,7 +2,7 @@
 # Swin Transformer
 # Copyright (c) 2021 Microsoft
 # Licensed under The MIT License [see LICENSE for details]
-# Written by Tao Zeng a
+# Written by Tao Zeng a change
 # --------------------------------------------------------
 
 import torch
