@@ -12,7 +12,7 @@ from .ssd_vgg import SSDVGG
 from .trident_resnet import TridentResNet
 from .swin_transformer import SwinTransformer
 from .self_backbones import MobileNet
-from .contextual_swin_transformer import
+from .contextual_swin_transformer import Contextual_SwinTransformer
 
 __all__ = [
     'RegNet', 'ResNet', 'ResNetV1d', 'ResNeXt', 'SSDVGG', 'HRNet', 'Res2Net',
