@@ -224,7 +224,6 @@ class WindowAttention(nn.Module):
 
 
 
-
         return q_crpb, k_crpb, v_crpb
 
     def forward(self, x, mask=None):
@@ -764,5 +763,5 @@ class Contextual_SwinTransformer(nn.Module):
 
     def train(self, mode=True):
         """Convert the model into training mode while keep layers freezed."""
-        super(SwinTransformer, self).train(mode)
+        super(Contextual_SwinTransformer, self).train(mode)
         self._freeze_stages()

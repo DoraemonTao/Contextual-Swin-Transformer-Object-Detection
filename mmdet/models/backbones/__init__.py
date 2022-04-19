@@ -17,5 +17,5 @@ from .contextual_swin_transformer import Contextual_SwinTransformer
 __all__ = [
     'RegNet', 'ResNet', 'ResNetV1d', 'ResNeXt', 'SSDVGG', 'HRNet', 'Res2Net',
     'HourglassNet', 'DetectoRS_ResNet', 'DetectoRS_ResNeXt', 'Darknet',
-    'ResNeSt', 'TridentResNet', 'SwinTransformer'
+    'ResNeSt', 'TridentResNet', 'SwinTransformer','Contextual_SwinTransformer'
 ]
